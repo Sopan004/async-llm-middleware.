@@ -1,0 +1,156 @@
+Author: Sopan Bhattacharya | BS, IIT Madras
+''',
+​"nexus-ai-engine/requirements.txt": r'''fastapi==0.115.0
+uvicorn==0.30.6
+anthropic==0.34.0
+python-multipart==0.0.9
+pydantic==2.8.2
+pydantic-settings==2.5.2
+python-dotenv
+tenacity
+pytest
+httpx
+streamlit
+requests
+''',
+​"nexus-ai-engine/Dockerfile": r'''FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY ./app /app/app
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+''',
+​"nexus-ai-engine/.github/workflows/python-app.yml": r'''name: Python Application CI
+on:
+push:
+branches: [ "main" ]
+pull_request:
+branches: [ "main" ]
+jobs:
+build:
+runs-on: ubuntu-latest
+steps:
+- uses: actions/checkout@v4
+- name: Set up Python 3.11
+uses: actions/setup-python@v5
+with:
+python-version: "3.11"
+- name: Install dependencies
+run: |
+python -m pip install --upgrade pip
+pip install pytest httpx
+if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+- name: Run Pytest
+run: |
+pytest
+''',
+​"nexus-ai-engine/app/core/config.py": r'''import os
+from pydantic_settings import BaseSettings
+​class Settings(BaseSettings):
+PROJECT_NAME: str = "Nexus SMB Agent API"
+VERSION: str = "1.0.0"
+ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+​class Config:
+env_file = ".env"
+​settings = Settings()
+''',
+​"nexus-ai-engine/app/models/schemas.py": r'''from pydantic import BaseModel, Field
+from typing import List, Optional
+​class OrderItem(BaseModel):
+item_name: str
+quantity: int
+notes: Optional[str] = None
+​class ExtractionRequest(BaseModel):
+raw_text: str = Field(..., min_length=5)
+​class ExtractionResponse(BaseModel):
+customer_name: Optional[str]
+items: List[OrderItem]
+total_estimated_value: Optional[str]
+confidence_score: float
+''',
+​"nexus-ai-engine/app/services/llm_service.py": r'''import json
+from anthropic import AsyncAnthropic
+from app.core.config import settings
+​client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+​async def process_unstructured_order(raw_text: str) -> dict:
+system_prompt = """You are a precise data extraction agent. Extract order details from the unstructured text.
+You MUST respond STRICTLY in JSON format matching this schema:
+{"customer_name": "string or null", "items": [{"item_name": "string", "quantity": int, "notes": "string"}], "total_estimated_value": "string or null", "confidence_score": float}"""
+​response = await client.messages.create(
+model="claude-3-haiku-20240307",
+max_tokens=1024,
+system=system_prompt,
+messages=[{"role": "user", "content": raw_text}]
+)
+return json.loads(response.content[0].text)
+''',
+​"nexus-ai-engine/app/api/v1/endpoints/agent.py": r'''from fastapi import APIRouter, HTTPException
+from app.models.schemas import ExtractionRequest, ExtractionResponse
+from app.services.llm_service import process_unstructured_order
+​router = APIRouter()
+​@router.post("/extract-order", response_model=ExtractionResponse)
+async def extract_order(request: ExtractionRequest):
+try:
+data = await process_unstructured_order(request.raw_text)
+return data
+except Exception as e:
+raise HTTPException(status_code=500, detail=f"LLM Processing Error: {str(e)}")
+''',
+​"nexus-ai-engine/app/main.py": r'''from fastapi import FastAPI
+from app.api.v1.endpoints import agent
+from app.core.config import settings
+​app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION)
+​app.include_router(agent.router, prefix="/api/v1/agent", tags=["Agent Operations"])
+​@app.get("/health")
+def health_check():
+return {"status": "operational"}
+''',
+​"nexus-ai-engine/tests/test_agent.py": r'''import pytest
+from fastapi.testclient import TestClient
+from unittest.mock import patch
+from app.main import app
+​client = TestClient(app)
+​@patch("app.api.v1.endpoints.agent.process_unstructured_order")
+def test_extract_order_success(mock_process):
+mock_process.return_value = {
+"customer_name": "Rahul Sharma",
+"items": [{"item_name": "Chairs", "quantity": 4, "notes": "Black"}],
+"total_estimated_value": "12000 INR",
+"confidence_score": 0.98
+}
+​payload = {"raw_text": "Please send 4 black chairs to Rahul Sharma. Total is 12000 INR."}
+response = client.post("/api/v1/agent/extract-order", json=payload)
+​assert response.status_code == 200
+assert response.json()["customer_name"] == "Rahul Sharma"
+assert response.json()["confidence_score"] == 0.98
+''',
+​"nexus-ai-engine/frontend/app.py": r'''import streamlit as st
+import requests
+​st.set_page_config(page_title="Nexus | SMB Order Agent", page_icon="⚡", layout="centered")
+​st.title("⚡ Nexus Order Extraction Agent")
+st.markdown("Transform messy WhatsApp messages into structured data.")
+​API_URL = "http://localhost:8000/api/v1/agent/extract-order"
+​default_msg = "Bhai, send 5 boxes of Parle-G and 2 cartons of Maggi to the Koramangala store. Bill it to Sharma Provisions."
+raw_text = st.text_area("Paste raw message here:", value=default_msg, height=120)
+​if st.button("Extract Data", type="primary"):
+if raw_text.strip():
+with st.spinner("Processing via Claude 3..."):
+try:
+res = requests.post(API_URL, json={"raw_text": raw_text})
+if res.status_code == 200:
+data = res.json()
+st.success("Extraction Complete!")
+col1, col2 = st.columns(2)
+col1.metric("Customer", data.get("customer_name", "N/A"))
+col2.metric("Confidence", f"{data.get('confidence_score', 0) * 100:.1f}%")
+st.table(data.get("items", []))
+with st.expander("View Raw JSON Structure"):
+st.json(data)
+else:
+st.error(f"Backend Error: {res.text}")
+except Exception:
+st.error("Connection failed. Ensure FastAPI is running on port 8000.")
+else:
+st.warning("Please enter some text.")
+'''
+}
