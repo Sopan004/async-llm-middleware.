@@ -1,156 +1,230 @@
-Author: Sopan Bhattacharya | BS, IIT Madras
-''',
-​"nexus-ai-engine/requirements.txt": r'''fastapi==0.115.0
-uvicorn==0.30.6
-anthropic==0.34.0
-python-multipart==0.0.9
-pydantic==2.8.2
-pydantic-settings==2.5.2
-python-dotenv
-tenacity
-pytest
-httpx
-streamlit
-requests
-''',
-​"nexus-ai-engine/Dockerfile": r'''FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY ./app /app/app
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-''',
-​"nexus-ai-engine/.github/workflows/python-app.yml": r'''name: Python Application CI
-on:
-push:
-branches: [ "main" ]
-pull_request:
-branches: [ "main" ]
-jobs:
-build:
-runs-on: ubuntu-latest
-steps:
-- uses: actions/checkout@v4
-- name: Set up Python 3.11
-uses: actions/setup-python@v5
-with:
-python-version: "3.11"
-- name: Install dependencies
-run: |
-python -m pip install --upgrade pip
-pip install pytest httpx
-if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-- name: Run Pytest
-run: |
-pytest
-''',
-​"nexus-ai-engine/app/core/config.py": r'''import os
-from pydantic_settings import BaseSettings
-​class Settings(BaseSettings):
-PROJECT_NAME: str = "Nexus SMB Agent API"
-VERSION: str = "1.0.0"
-ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
-​class Config:
-env_file = ".env"
-​settings = Settings()
-''',
-​"nexus-ai-engine/app/models/schemas.py": r'''from pydantic import BaseModel, Field
-from typing import List, Optional
-​class OrderItem(BaseModel):
-item_name: str
-quantity: int
-notes: Optional[str] = None
-​class ExtractionRequest(BaseModel):
-raw_text: str = Field(..., min_length=5)
-​class ExtractionResponse(BaseModel):
-customer_name: Optional[str]
-items: List[OrderItem]
-total_estimated_value: Optional[str]
-confidence_score: float
-''',
-​"nexus-ai-engine/app/services/llm_service.py": r'''import json
-from anthropic import AsyncAnthropic
-from app.core.config import settings
-​client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-​async def process_unstructured_order(raw_text: str) -> dict:
-system_prompt = """You are a precise data extraction agent. Extract order details from the unstructured text.
-You MUST respond STRICTLY in JSON format matching this schema:
-{"customer_name": "string or null", "items": [{"item_name": "string", "quantity": int, "notes": "string"}], "total_estimated_value": "string or null", "confidence_score": float}"""
-​response = await client.messages.create(
-model="claude-3-haiku-20240307",
-max_tokens=1024,
-system=system_prompt,
-messages=[{"role": "user", "content": raw_text}]
-)
-return json.loads(response.content[0].text)
-''',
-​"nexus-ai-engine/app/api/v1/endpoints/agent.py": r'''from fastapi import APIRouter, HTTPException
-from app.models.schemas import ExtractionRequest, ExtractionResponse
-from app.services.llm_service import process_unstructured_order
-​router = APIRouter()
-​@router.post("/extract-order", response_model=ExtractionResponse)
-async def extract_order(request: ExtractionRequest):
-try:
-data = await process_unstructured_order(request.raw_text)
-return data
-except Exception as e:
-raise HTTPException(status_code=500, detail=f"LLM Processing Error: {str(e)}")
-''',
-​"nexus-ai-engine/app/main.py": r'''from fastapi import FastAPI
-from app.api.v1.endpoints import agent
-from app.core.config import settings
-​app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION)
-​app.include_router(agent.router, prefix="/api/v1/agent", tags=["Agent Operations"])
-​@app.get("/health")
-def health_check():
-return {"status": "operational"}
-''',
-​"nexus-ai-engine/tests/test_agent.py": r'''import pytest
-from fastapi.testclient import TestClient
-from unittest.mock import patch
-from app.main import app
-​client = TestClient(app)
-​@patch("app.api.v1.endpoints.agent.process_unstructured_order")
-def test_extract_order_success(mock_process):
-mock_process.return_value = {
-"customer_name": "Rahul Sharma",
-"items": [{"item_name": "Chairs", "quantity": 4, "notes": "Black"}],
-"total_estimated_value": "12000 INR",
-"confidence_score": 0.98
+# 🧠 AI Data Translation Layer
+
+> **Convert messy, unstructured documents into clean, structured, AI-ready datasets for LLM & RAG pipelines — powered by Anthropic Claude.**
+
+[![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green?logo=fastapi)](https://fastapi.tiangolo.com)
+[![Claude](https://img.shields.io/badge/Anthropic-Claude%20Sonnet-orange)](https://anthropic.com)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+
+---
+
+## 📌 Problem Statement
+
+Enterprises store vast amounts of data in unstructured formats — invoices, contracts, patient records, emails, reports — that are unusable by LLMs and RAG pipelines without preprocessing. Manual extraction is slow, inconsistent, and doesn't scale.
+
+**AI Data Translation Layer solves this** by using Claude's intelligence to automatically extract, normalize, and structure any document into consistent JSON — ready for vector embedding and retrieval.
+
+---
+
+## ✨ Features
+
+| Feature | Description |
+|---|---|
+| 🤖 **Claude-Powered Extraction** | Intelligent field detection, type inference & normalization |
+| 📄 **Multi-Format Ingestion** | Raw text, `.txt`, `.csv` file upload |
+| 🗂️ **Custom Schema Support** | Define your target JSON structure as a hint |
+| 🔍 **RAG Chunking** | Auto-splits output into overlapping chunks with metadata |
+| 📦 **Batch Processing** | Translate up to 10 documents per request |
+| 💰 **Cost Tracking** | Token usage & estimated USD cost per request |
+| 📖 **Auto Docs** | Swagger UI at `/docs`, ReDoc at `/redoc` |
+
+---
+
+## 🏗️ Architecture
+
+```
+┌────────────────────────────────────────────────────┐
+│                Enterprise Application               │
+└─────────────────────┬──────────────────────────────┘
+                      │  HTTP Request (raw document)
+                      ▼
+┌────────────────────────────────────────────────────┐
+│              AI Data Translation Layer             │
+│                  (FastAPI Service)                 │
+│                                                    │
+│   /translate        → Raw text → structured JSON  │
+│   /translate/file   → Upload .txt / .csv          │
+│   /translate/batch  → Up to 10 docs at once       │
+└─────────────────────┬──────────────────────────────┘
+                      │  API Call
+                      ▼
+┌────────────────────────────────────────────────────┐
+│           Anthropic Claude Sonnet API              │
+│     (Extraction · Normalization · Structuring)     │
+└─────────────────────┬──────────────────────────────┘
+                      │
+          ┌───────────┴──────────┐
+          ▼                      ▼
+  Structured JSON           RAG Chunks
+  (clean output)       (with metadata tags)
+          │                      │
+          ▼                      ▼
+   Your Database         Vector Store
+  (PostgreSQL etc.)  (Pinecone / ChromaDB)
+```
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Python 3.11+
+- [Anthropic API key](https://console.anthropic.com)
+
+### Installation
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/yourusername/ai-data-translation-layer.git
+cd ai-data-translation-layer
+
+# 2. Create virtual environment
+python -m venv venv
+source venv/bin/activate   # Windows: venv\Scripts\activate
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Set up environment variables
+cp .env.example .env
+# Edit .env and add your ANTHROPIC_API_KEY
+
+# 5. Run the server
+uvicorn app.main:app --reload --port 8000
+```
+
+**API Docs:** http://localhost:8000/docs
+
+---
+
+## 📡 API Reference
+
+### `POST /api/v1/translate`
+Translate raw unstructured text to structured JSON.
+
+**Request:**
+```json
+{
+  "raw_text": "Invoice #4521. Date: Jan 5 2025. Client: Acme Corp. Total: $3550.",
+  "output_schema": null,
+  "chunk_for_rag": true,
+  "chunk_size": 500
 }
-​payload = {"raw_text": "Please send 4 black chairs to Rahul Sharma. Total is 12000 INR."}
-response = client.post("/api/v1/agent/extract-order", json=payload)
-​assert response.status_code == 200
-assert response.json()["customer_name"] == "Rahul Sharma"
-assert response.json()["confidence_score"] == 0.98
-''',
-​"nexus-ai-engine/frontend/app.py": r'''import streamlit as st
-import requests
-​st.set_page_config(page_title="Nexus | SMB Order Agent", page_icon="⚡", layout="centered")
-​st.title("⚡ Nexus Order Extraction Agent")
-st.markdown("Transform messy WhatsApp messages into structured data.")
-​API_URL = "http://localhost:8000/api/v1/agent/extract-order"
-​default_msg = "Bhai, send 5 boxes of Parle-G and 2 cartons of Maggi to the Koramangala store. Bill it to Sharma Provisions."
-raw_text = st.text_area("Paste raw message here:", value=default_msg, height=120)
-​if st.button("Extract Data", type="primary"):
-if raw_text.strip():
-with st.spinner("Processing via Claude 3..."):
-try:
-res = requests.post(API_URL, json={"raw_text": raw_text})
-if res.status_code == 200:
-data = res.json()
-st.success("Extraction Complete!")
-col1, col2 = st.columns(2)
-col1.metric("Customer", data.get("customer_name", "N/A"))
-col2.metric("Confidence", f"{data.get('confidence_score', 0) * 100:.1f}%")
-st.table(data.get("items", []))
-with st.expander("View Raw JSON Structure"):
-st.json(data)
-else:
-st.error(f"Backend Error: {res.text}")
-except Exception:
-st.error("Connection failed. Ensure FastAPI is running on port 8000.")
-else:
-st.warning("Please enter some text.")
-'''
+```
+
+**Response:**
+```json
+{
+  "structured_data": {
+    "invoice_number": "4521",
+    "date": "2025-01-05",
+    "client": { "name": "Acme Corp" },
+    "total_due": 3550
+  },
+  "rag_chunks": [
+    {
+      "chunk_id": "chunk_0000",
+      "text": "{ \"invoice_number\": \"4521\" ...",
+      "word_count": 42,
+      "metadata": { "ready_for_embedding": true }
+    }
+  ],
+  "metadata": {
+    "raw_char_count": 68,
+    "structured_fields": ["invoice_number", "date", "client", "total_due"],
+    "record_count": 1,
+    "rag_ready": true
+  },
+  "token_usage": {
+    "input_tokens": 180,
+    "output_tokens": 95,
+    "estimated_cost_usd": 0.00197
+  }
 }
+```
+
+### `POST /api/v1/translate/file`
+Upload a `.txt` or `.csv` file.
+
+### `POST /api/v1/translate/batch`
+Send an array of up to 10 raw document strings.
+
+---
+
+## 🧪 Running Tests
+
+```bash
+pytest tests/ -v
+```
+
+---
+
+## 📁 Project Structure
+
+```
+ai-data-translation-layer/
+├── app/
+│   ├── main.py                 # FastAPI app + CORS
+│   ├── routers/
+│   │   └── translate.py        # API route handlers
+│   ├── services/
+│   │   └── translator.py       # Core Claude extraction logic
+│   ├── models/
+│   │   └── schemas.py          # Pydantic request/response models
+│   └── utils/
+│       ├── config.py           # Environment settings
+│       └── logger.py           # Structured logging
+├── tests/
+│   └── test_translate.py       # Unit tests
+├── examples/
+│   ├── sample_invoice.txt      # Demo input document
+│   └── api_requests.sh         # Example curl commands
+├── .env.example
+├── .gitignore
+├── requirements.txt
+└── README.md
+```
+
+---
+
+## 🗺️ Roadmap
+
+- [ ] PDF ingestion (PyMuPDF)
+- [ ] DOCX / Excel support
+- [ ] Direct vector DB push (Pinecone, ChromaDB, Weaviate)
+- [ ] Schema template library (invoices, medical, legal, HR, finance)
+- [ ] API key authentication middleware
+- [ ] Async batch processing with job queue (Celery + Redis)
+- [ ] React dashboard UI
+- [ ] Docker + Docker Compose setup
+- [ ] Deploy to Render / Railway (one-click)
+
+---
+
+## 🛠️ Tech Stack
+
+- **Backend:** Python, FastAPI, Uvicorn
+- **AI:** Anthropic Claude Sonnet (claude-sonnet-4-20250514)
+- **Validation:** Pydantic v2
+- **Testing:** Pytest, HTTPX
+- **Deployment:** Render / Railway / AWS Lambda
+
+---
+
+## 🤝 Contributing
+
+Pull requests are welcome! For major changes, please open an issue first.
+
+---
+
+## 📄 License
+
+[MIT](LICENSE)
+
+---
+
+## 👤 Author
+
+**Sopan** — AI/ML Engineer & Entrepreneur  
+🔗 [LinkedIn](https://linkedin.com/in/yourprofile) · [Portfolio](https://yourportfolio.com) · [GitHub](https://github.com/yourusername)

@@ -1,0 +1,16 @@
+# Example: Invoice Document
+Invoice No. INV-4521 | Date: 5th Jan, 2025
+Bill To: Acme Corporation, 123 Main Street, New York, NY 10001
+Email: billing@acme.com | Phone: +1-212-555-0100
+
+Services Rendered:
+- Web Development (40hrs @ $62.50/hr) ......... $2,500.00
+- SEO Audit ...................................... $750.00
+- Hosting (12 months) ........................... $300.00
+
+Subtotal: $3,550.00
+Tax (8%): $284.00
+TOTAL DUE: $3,834.00
+
+Payment due within 30 days. Bank transfer preferred.
+Account: 123456789 | Routing: 021000021
